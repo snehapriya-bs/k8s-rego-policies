@@ -1,10 +1,5 @@
-# OS / editor cruft
 .DS_Store
-*.swp
-
-# Local scratch files from manual testing
+__pycache__/
+*.pyc
+.venv/
 /tmp/
-*.json.tmp
-
-# OPA binary if someone downloads it into the repo by mistake
-/opa
