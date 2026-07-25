@@ -18,17 +18,45 @@ import sys
 from pathlib import Path
 
 LABELS = ["Rule", "Applies to", "Condition", "Action", "Rationale"]
+# Accepts both a literal em dash (—, from extract-text) and pandoc's "---"
+# ASCII rendering of the same character.
 HEADING_RE = re.compile(r"^POL-(\d{3})\s+—\s+(.+)$")
 LABEL_RE = re.compile(r"^(" + "|".join(LABELS) + r"):\s*(.*)$")
 VALID_ACTIONS = {"deny", "warn"}
 
 
 def extract_text(docx_path: str) -> str:
-    """Runs the `extract-text` CLI (docx -> markdown) and returns stdout."""
+    """Converts docx -> markdown. Prefers `extract-text` (available in the
+    Claude sandbox); falls back to `pandoc`, which is what CI runners use
+    (`apt-get install -y pandoc` or the pandoc-action on GitHub Actions).
+    --wrap=none is required — otherwise pandoc hard-wraps at ~80 chars and
+    breaks a field's text across multiple lines."""
+    import shutil
+
+    if shutil.which("extract-text"):
+        result = subprocess.run(
+            ["extract-text", docx_path], capture_output=True, text=True, check=True
+        )
+        return result.stdout
+
     result = subprocess.run(
-        ["extract-text", docx_path], capture_output=True, text=True, check=True
+        ["pandoc", docx_path, "-t", "markdown", "--wrap=none"],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    return result.stdout
+    return unescape_pandoc_markdown(result.stdout)
+
+
+def unescape_pandoc_markdown(text: str) -> str:
+    """Pandoc backslash-escapes markdown-special characters in its output
+    (verified against this document: [ ] * @ ' "), which extract-text does
+    not. It also renders em dashes as ASCII '---'. Undo both so the two
+    extraction paths produce byte-identical text for the parser below."""
+    for ch in ("[", "]", "*", "@", "'", '"'):
+        text = text.replace("\\" + ch, ch)
+    text = text.replace("---", "—")
+    return text
 
 
 def strip_bold(text: str) -> str:
@@ -108,7 +136,7 @@ def build_spec(blocks: list[str]) -> dict:
     return {"policies": [parse_block(b) for b in blocks]}
 
 
-def main(docx_path: str, out_path: str) -> None:
+def main(docx_path: str, out_path: str, check_only: bool = False) -> None:
     raw = extract_text(docx_path)
     text = strip_bold(raw)
     blocks = split_policy_blocks(text)
@@ -116,12 +144,31 @@ def main(docx_path: str, out_path: str) -> None:
         raise ValueError(f"No POL-XXX policy blocks found in {docx_path}")
 
     spec = build_spec(blocks)
-    Path(out_path).write_text(json.dumps(spec, indent=2) + "\n")
+    new_content = json.dumps(spec, indent=2) + "\n"
+
+    if check_only:
+        out_file = Path(out_path)
+        if not out_file.exists():
+            print(f"FAIL: {out_path} does not exist — run without --check to generate it")
+            sys.exit(1)
+        existing_content = out_file.read_text()
+        if existing_content != new_content:
+            print(f"FAIL: {out_path} is out of sync with {docx_path}")
+            print("Run: python3 tools/doc_to_json.py <docx> <json>  to regenerate it")
+            sys.exit(1)
+        print(f"OK: {out_path} matches {docx_path} ({len(spec['policies'])} policies)")
+        return
+
+    Path(out_path).write_text(new_content)
     print(f"Wrote {len(spec['policies'])} policies to {out_path}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("usage: doc_to_json.py <input.docx> <output.json>")
-        sys.exit(1)
-    main(sys.argv[1], sys.argv[2])
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("docx_path")
+    parser.add_argument("out_path")
+    parser.add_argument("--check", action="store_true", help="Verify out_path is in sync; don't write")
+    args = parser.parse_args()
+    main(args.docx_path, args.out_path, check_only=args.check)
