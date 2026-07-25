@@ -1,0 +1,60 @@
+name: Generate policy JSON
+
+# Runs whenever the source doc or the converter itself changes, and can
+# also be triggered manually from the Actions tab.
+on:
+  push:
+    paths:
+      - "docs/*.docx"
+      - "tools/doc_to_json.py"
+  pull_request:
+    paths:
+      - "docs/*.docx"
+      - "tools/doc_to_json.py"
+  workflow_dispatch: {}
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: Find source docx
+        id: find_docx
+        run: |
+          DOCX_PATH=$(find docs -maxdepth 1 -name '*.docx' | head -n 1)
+          if [ -z "$DOCX_PATH" ]; then
+            echo "::error::No .docx file found in docs/"
+            exit 1
+          fi
+          echo "path=$DOCX_PATH" >> "$GITHUB_OUTPUT"
+          echo "Using source doc: $DOCX_PATH"
+
+      - name: Generate policies.json
+        run: python3 tools/doc_to_json.py "${{ steps.find_docx.outputs.path }}" policy_spec/policies.json
+
+      # Always upload the freshly generated file — even if the sync check
+      # below fails, so you can download it and inspect/commit manually.
+      - name: Upload policies.json as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: policies-json
+          path: policy_spec/policies.json
+
+      - name: Check for drift against the committed version
+        run: |
+          if git diff --quiet -- policy_spec/policies.json; then
+            echo "policy_spec/policies.json is in sync with the docx."
+          else
+            echo "::error::policy_spec/policies.json is out of sync with the docx."
+            echo "Download the 'policies-json' artifact from this run, review the diff below, and commit it if correct:"
+            git diff -- policy_spec/policies.json
+            exit 1
+          fi
