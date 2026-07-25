@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pol001-privileged
+  namespace: team-a
+  labels:
+    team: platform
+    environment: prod
+spec:
+  hostNetwork: false
+  hostPID: false
+  hostIPC: false
+  volumes:
+  - name: cache
+    emptyDir: {}
+  containers:
+  - name: app
+    image: registry.internal.example.com/app:1.4.2
+    securityContext:
+      privileged: true
+      runAsNonRoot: true
+      readOnlyRootFilesystem: true
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-pod
+  # no namespace -> POL-010
+  # no labels -> POL-008
+spec:
+  hostNetwork: true # POL-006
+  volumes:
+    - name: node-fs
+      hostPath: # POL-007
+        path: /etc
+  containers:
+    - name: app
+      image: docker.io/library/app:latest # POL-004 + POL-005
+      securityContext:
+        privileged: true # POL-001
+        runAsNonRoot: false # POL-002
+        readOnlyRootFilesystem: false # POL-009
+      resources: {} # POL-003
