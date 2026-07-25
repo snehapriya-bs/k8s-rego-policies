@@ -159,6 +159,7 @@ def main(docx_path: str, out_path: str, check_only: bool = False) -> None:
         print(f"OK: {out_path} matches {docx_path} ({len(spec['policies'])} policies)")
         return
 
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     Path(out_path).write_text(new_content)
     print(f"Wrote {len(spec['policies'])} policies to {out_path}")
 
