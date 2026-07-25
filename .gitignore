@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .venv/
 /tmp/
+# generated build artifact — never commit, only produced by CI
+policy_spec/policies.json
