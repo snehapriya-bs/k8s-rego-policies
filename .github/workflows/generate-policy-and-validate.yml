@@ -22,6 +22,8 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # Produces policy_spec/policies.json from the docx. Independent of the
+  # rest of the pipeline — just an artifact for inspection.
   generate:
     runs-on: ubuntu-latest
     steps:
@@ -43,7 +45,6 @@ jobs:
             exit 1
           fi
           echo "path=$DOCX_PATH" >> "$GITHUB_OUTPUT"
-          echo "Using source doc: $DOCX_PATH"
 
       - name: Generate policies.json
         run: python3 tools/doc_to_json.py "${{ steps.find_docx.outputs.path }}" policy_spec/policies.json
@@ -55,24 +56,67 @@ jobs:
           path: policy_spec/policies.json
           retention-days: 30
 
-  # Confirms the runner can reach Vertex AI and get a real response from
-  # Gemini. Not the full RegoForge pipeline yet (that's Step 5c-5e) — this
-  # exists to catch auth/config problems early and in isolation.
-  #
-  # Requires two repo secrets (Settings -> Secrets and variables -> Actions):
-  #   GCP_PROJECT_ID  — your GCP project ID
-  #   GCP_SA_KEY      — full JSON content of a service account key with
-  #                     the "Vertex AI User" (roles/aiplatform.user) role
-  #
-  # Skipped on pull_request events: secrets aren't available to PRs from
-  # forks, so this only runs on pushes to the repo and manual dispatch.
-  # Runs regoforge_agent.py's deterministic validate() against
-  # policy/podsecurity.rego and every manifest in manifests/. Today that
-  # file is a hand-verified baseline; from Step 5d onward it's whatever
-  # RegoForge generated and passed its own retry loop before being
-  # committed. This job doesn't care which — it just re-checks it.
-  validate-policy:
+  # Step 1 of the real pipeline: policies.json -> Gemini -> validate
+  # (real opa, internal retry loop) -> policy/podsecurity.rego. Uploaded
+  # as an artifact only, never auto-committed.
+  generate-rego:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: Install Python dependencies
+        run: pip install pyyaml google-genai
+
+      - name: Install opa
+        run: |
+          curl -L -o /usr/local/bin/opa https://github.com/open-policy-agent/opa/releases/latest/download/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - name: Find source docx
+        id: find_docx
+        run: |
+          DOCX_PATH=$(find docs -maxdepth 1 -name '*.docx' | head -n 1)
+          echo "path=$DOCX_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate policies.json
+        run: python3 tools/doc_to_json.py "${{ steps.find_docx.outputs.path }}" policy_spec/policies.json
+
+      - name: Run RegoForge agent (generate -> validate -> repair)
+        env:
+          GOOGLE_CLOUD_PROJECT: "${{ secrets.GCP_PROJECT_ID }}"
+          VERTEX_LOCATION: us-central1
+        run: python3 tools/regoforge_agent.py --policies policy_spec/policies.json --manifests manifests --out policy/podsecurity.rego --max-retries 3
+
+      - name: Upload generated policy.rego as a build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-podsecurity-rego
+          path: policy/podsecurity.rego
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Step 2: downloads the EXACT rego file generate-rego just produced
+  # and independently re-validates it against every pod YAML manifest in
+  # manifests/. Runs only after generate-rego succeeds.
+  validate-policy:
+    needs: generate-rego
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -89,9 +133,23 @@ jobs:
           chmod +x /usr/local/bin/opa
           opa version
 
-      - name: Validate policy against manifests
+      - name: Download the freshly generated policy
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-podsecurity-rego
+          path: downloaded-artifact
+
+      - name: Place it at policy/podsecurity.rego
+        run: |
+          mkdir -p policy
+          find downloaded-artifact -name "podsecurity.rego" -exec cp {} policy/podsecurity.rego \;
+          test -f policy/podsecurity.rego || (echo "::error::Downloaded artifact did not contain podsecurity.rego" && exit 1)
+
+      - name: Validate the generated policy against all pod YAML manifests
         run: python3 tools/validate_policy.py
 
+  # Independent, fast sanity check that Vertex AI is reachable at all —
+  # doesn't depend on the rest of the pipeline succeeding.
   verify-vertex-ai:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
