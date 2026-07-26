@@ -59,7 +59,7 @@ jobs:
   # Step 1 of the real pipeline: policies.json -> Gemini -> validate
   # (real opa, internal retry loop) -> policy/podsecurity.rego. Uploaded
   # as an artifact only, never auto-committed.
-  generate-rego: 
+  generate-rego:
     needs: generate
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
@@ -69,9 +69,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install pandoc
-        run: sudo apt-get update && sudo apt-get install -y pandoc
 
       - name: Install Python dependencies
         run: pip install pyyaml google-genai
@@ -87,11 +84,17 @@ jobs:
         with:
           credentials_json: "${{ secrets.GCP_SA_KEY }}"
 
-      - name: Find source docx
-        id: find_docx
+      - name: Download policies.json from the generate job
+        uses: actions/download-artifact@v4
+        with:
+          name: policies-json
+          path: downloaded-json
+
+      - name: Place it at policy_spec/policies.json
         run: |
-          DOCX_PATH=$(find docs -maxdepth 1 -name '*.docx' | head -n 1)
-          echo "path=$DOCX_PATH" >> "$GITHUB_OUTPUT"
+          mkdir -p policy_spec
+          find downloaded-json -name "policies.json" -exec cp {} policy_spec/policies.json \;
+          test -f policy_spec/policies.json || (echo "::error::Downloaded artifact did not contain policies.json" && exit 1)
 
       - name: Run RegoForge agent (generate -> validate -> repair)
         env:
