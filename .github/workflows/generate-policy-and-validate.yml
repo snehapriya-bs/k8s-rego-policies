@@ -114,4 +114,4 @@ jobs:
         env:
           GOOGLE_CLOUD_PROJECT: "${{ secrets.GCP_PROJECT_ID }}"
           VERTEX_LOCATION: us-central1
-        run: python3 tools/smoke_test_llm.pys
+        run: python3 tools/smoke_test_llm.py
