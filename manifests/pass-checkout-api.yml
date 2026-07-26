@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: payments
+  labels:
+    app: checkout-api
+    # (forgot team/environment labels — easy to miss)
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: checkout-api
+  template:
+    metadata:
+      labels:
+        app: checkout-api
+    spec:
+      containers:
+        - name: checkout-api
+          image: myregistry/checkout-api:latest  # grabbed :latest for a "quick test"
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PAYMENT_GATEWAY_URL
+              value: "https://payments.internal/api"
+          # no resources block — never got around to setting limits
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
