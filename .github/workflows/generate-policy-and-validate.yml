@@ -1,4 +1,4 @@
-name: Generate policy JSON
+name: Generate policy and Validate
 
 on:
   push:
