@@ -59,7 +59,8 @@ jobs:
   # Step 1 of the real pipeline: policies.json -> Gemini -> validate
   # (real opa, internal retry loop) -> policy/podsecurity.rego. Uploaded
   # as an artifact only, never auto-committed.
-  generate-rego:
+  generate-rego: 
+    needs: generate
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     steps:
@@ -91,9 +92,6 @@ jobs:
         run: |
           DOCX_PATH=$(find docs -maxdepth 1 -name '*.docx' | head -n 1)
           echo "path=$DOCX_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Regenerate policies.json
-        run: python3 tools/doc_to_json.py "${{ steps.find_docx.outputs.path }}" policy_spec/policies.json
 
       - name: Run RegoForge agent (generate -> validate -> repair)
         env:
